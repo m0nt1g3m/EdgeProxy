@@ -35,12 +35,13 @@ tasks:
 
   run:
     desc: Run EdgeProxy from source
+    deps: [setup]
     cmds:
       - go run ./cmd/app
 
   start:
     desc: Build binary and run it
-    deps: [build]
+    deps: [setup, build]
     cmds:
       - ./{{.BINARY_NAME}}
 
