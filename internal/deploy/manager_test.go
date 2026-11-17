@@ -65,3 +65,44 @@ func TestIssueCertBuildsDryRunCommand(t *testing.T) {
 		t.Fatalf("unexpected certbot args: %q\nwant: %q", gotStr, want)
 	}
 }
+
+func TestDeployCreatesDummyCertBeforeNginxValidation(t *testing.T) {
+	dir, logPath := writeDockerStub(t)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	confDir := filepath.Join(dir, "nginx", "conf.d")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir conf dir: %v", err)
+	}
+
+	manager := NewManager(dir, "admin@example.com")
+	data := nginx.ConfigData{
+		Domains:      "example.com",
+		ServerNames:  "example.com",
+		Primary:      "example.com",
+		Type:         "proxy",
+		Upstream:     "app:8080",
+		UpstreamName: "up_example_com",
+		BodySize:     "10M",
+		SSL:          true,
+	}
+
+	if err := manager.Deploy(data); err != nil {
+		t.Fatalf("Deploy returned error: %v", err)
+	}
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+
+	content := string(got)
+	certIndex := strings.Index(content, "compose run --rm --entrypoint sh certbot -c")
+	nginxIndex := strings.Index(content, "compose exec -T nginx nginx -t")
+	if certIndex == -1 || nginxIndex == -1 {
+		t.Fatalf("expected both cert creation and nginx validation calls, got: %q", content)
+	}
+	if certIndex > nginxIndex {
+		t.Fatalf("expected dummy cert creation before nginx validation, got: %q", content)
+	}
+}
