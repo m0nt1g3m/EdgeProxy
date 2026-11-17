@@ -56,3 +56,22 @@ func TestBuildConfigRejectsUnknownType(t *testing.T) {
 		t.Fatal("expected error for unknown type")
 	}
 }
+
+func TestBuildConfigRejectsInvalidDomain(t *testing.T) {
+	for _, domain := range []string{
+		"example.com; touch /tmp/pwned",
+		"exa mple.com",
+		"-example.com",
+		"example..com",
+	} {
+		if _, err := BuildConfig(domain, "proxy", "app:8080", "", "10M", true); err == nil {
+			t.Fatalf("expected error for domain %q", domain)
+		}
+	}
+}
+
+func TestBuildConfigRejectsRelativeRedirectTarget(t *testing.T) {
+	if _, err := BuildConfig("www.example.com", "redirect", "", "/login", "10M", true); err == nil {
+		t.Fatal("expected error for relative redirect target")
+	}
+}

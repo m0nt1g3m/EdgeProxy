@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	"EdgeProxy/internal/nginx"
@@ -20,6 +21,11 @@ func BuildConfig(domains, kind, upstream, redirectTo, bodySize string, ssl bool)
 	if len(domainList) == 0 {
 		return nginx.ConfigData{}, fmt.Errorf("at least one domain is required")
 	}
+	for _, domain := range domainList {
+		if !validDomain(domain) {
+			return nginx.ConfigData{}, fmt.Errorf("invalid domain %q", domain)
+		}
+	}
 
 	kind = strings.TrimSpace(kind)
 	if kind == "" {
@@ -34,6 +40,10 @@ func BuildConfig(domains, kind, upstream, redirectTo, bodySize string, ssl bool)
 	case "redirect":
 		if strings.TrimSpace(redirectTo) == "" {
 			return nginx.ConfigData{}, fmt.Errorf("redirect target is required for redirect")
+		}
+		target, err := url.Parse(redirectTo)
+		if err != nil || target.Host == "" || (target.Scheme != "http" && target.Scheme != "https") {
+			return nginx.ConfigData{}, fmt.Errorf("redirect target must be an absolute http(s) URL")
 		}
 	default:
 		return nginx.ConfigData{}, fmt.Errorf("unknown service type %q", kind)
@@ -90,6 +100,30 @@ func removeEmpty(values []string) []string {
 		}
 	}
 	return result
+}
+
+func validDomain(domain string) bool {
+	if len(domain) == 0 || len(domain) > 253 {
+		return false
+	}
+
+	for _, label := range strings.Split(domain, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		for i, r := range label {
+			switch {
+			case r >= 'a' && r <= 'z':
+			case r >= 'A' && r <= 'Z':
+			case r >= '0' && r <= '9':
+			case r == '-' && i != 0 && i != len(label)-1:
+			default:
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func RunInteractive() (nginx.ConfigData, error) {
