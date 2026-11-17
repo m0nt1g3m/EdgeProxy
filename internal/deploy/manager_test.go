@@ -152,6 +152,36 @@ exit 0
 	}
 }
 
+func TestIssueCertRemovesDummyLineageBeforeRealIssuance(t *testing.T) {
+	dir, logPath := writeDockerStub(t)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	manager := NewManager(dir, "admin@example.com")
+	data := nginx.ConfigData{Domains: "example.com", Primary: "example.com"}
+
+	if err := manager.issueCert(data, false); err != nil {
+		t.Fatalf("issueCert returned error: %v", err)
+	}
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+
+	content := string(got)
+	removeIndex := strings.Index(content, "rm -rf /etc/letsencrypt/live/example.com")
+	issueIndex := strings.Index(content, "compose run --rm --entrypoint certbot certbot certonly")
+	if removeIndex == -1 || issueIndex == -1 {
+		t.Fatalf("expected dummy removal and certbot run, got: %q", content)
+	}
+	if removeIndex > issueIndex {
+		t.Fatalf("expected dummy lineage removal before certbot, got: %q", content)
+	}
+	if strings.Contains(content, "--dry-run") {
+		t.Fatalf("real issuance must not use --dry-run: %q", content)
+	}
+}
+
 func TestEnsureHostRelayStartsSocatOnHostGateway(t *testing.T) {
 	dir, logPath := writeDockerStub(t)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

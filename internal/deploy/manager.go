@@ -93,6 +93,12 @@ func (m *Manager) createDummyCert(domain string) error {
 }
 
 func (m *Manager) issueCert(data nginx.ConfigData, dryRun bool) error {
+	if !dryRun {
+		if err := m.removeDummyCert(data.Primary); err != nil {
+			return fmt.Errorf("failed to remove temporary certificate: %w", err)
+		}
+	}
+
 	args := []string{"run", "--rm", "--entrypoint", "certbot", "certbot", "certonly",
 		"--webroot", "-w", "/var/www/certbot",
 		"--email", m.Email, "--agree-tos", "--no-eff-email", "--non-interactive"}
@@ -106,6 +112,23 @@ func (m *Manager) issueCert(data nginx.ConfigData, dryRun bool) error {
 	}
 
 	out, err := m.Compose.Run(args...)
+	if err != nil {
+		if !dryRun {
+			// Keep nginx reloadable if issuance fails after the dummy was removed.
+			_ = m.createDummyCert(data.Primary)
+		}
+		return fmt.Errorf("%w\n%s", err, strings.TrimSpace(out))
+	}
+	return nil
+}
+
+func (m *Manager) removeDummyCert(domain string) error {
+	script := fmt.Sprintf(
+		`rm -rf /etc/letsencrypt/live/%s /etc/letsencrypt/archive/%s /etc/letsencrypt/renewal/%s.conf`,
+		domain, domain, domain,
+	)
+
+	out, err := m.Compose.Run("run", "--rm", "--entrypoint", "sh", "certbot", "-c", script)
 	if err != nil {
 		return fmt.Errorf("%w\n%s", err, strings.TrimSpace(out))
 	}
