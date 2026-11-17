@@ -1,0 +1,12 @@
+docker-compose.yml
+.env
+certbot/
+nginx/conf.d/*.conf
+*.log
+!nginx/conf.d/.gitkeep
+edgeproxy
+
+.idea/
+.vscode/
+*.swp
+.DS_Store

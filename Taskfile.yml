@@ -1,0 +1,57 @@
+version: '3'
+
+vars:
+  BINARY_NAME: edgeproxy
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  setup:
+    desc: Prepare project config and Docker environment
+    cmds:
+      - |
+        if ! docker compose version >/dev/null 2>&1 && ! docker-compose version >/dev/null 2>&1; then
+          echo "WARNING: Docker Compose is not installed or not available in PATH."
+        fi
+        if [ ! -f docker-compose.yml ]; then
+          echo "WARNING: docker-compose.yml is missing; copying example config."
+          cp docker-compose.example.yml docker-compose.yml
+        fi
+        if [ ! -f .env ]; then
+          echo "WARNING: .env is missing. Creating a default one with a sample email. Update it before deploying."
+          printf 'EMAIL=you@example.com\n' > .env
+        fi
+        docker network inspect proxy_net >/dev/null 2>&1 || docker network create proxy_net
+        docker compose up -d
+
+  build:
+    desc: Build EdgeProxy binary for current OS
+    cmds:
+      - CGO_ENABLED=0 go build -o {{.BINARY_NAME}} ./cmd/app/main.go
+      - echo "Built ./{{.BINARY_NAME}}"
+
+  run:
+    desc: Run EdgeProxy from source
+    cmds:
+      - go run ./cmd/app
+
+  start:
+    desc: Build binary and run it
+    deps: [build]
+    cmds:
+      - ./{{.BINARY_NAME}}
+
+  clean:
+    desc: Remove built binary and local Docker config
+    cmds:
+      - rm -f {{.BINARY_NAME}}
+      - rm -f docker-compose.yml
+      - rm -f .env
+
+  down:
+    desc: Stop Docker services
+    cmds:
+      - docker compose down

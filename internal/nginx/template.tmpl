@@ -1,0 +1,53 @@
+{{ if ne .Type "redirect" }}
+upstream {{.UpstreamName}} {
+    zone {{.UpstreamName}} 64k;
+    least_conn;
+    server {{.Upstream}} resolve;
+    keepalive 64;
+    resolver 127.0.0.11 valid=10s ipv6=off;
+}
+{{ end }}
+
+server {
+    listen 80 reuseport;
+    listen [::]:80 reuseport;
+    server_name {{.ServerNames}};
+
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+
+    {{ if .SSL }}
+    location / { return 301 https://$host$request_uri; }
+    {{ else if eq .Type "redirect" }}
+    location / { return 301 {{.RedirectTo}}$request_uri; }
+    {{ else }}
+    client_max_body_size {{.BodySize}};
+    location / {
+        proxy_pass http://{{.UpstreamName}};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";{{.ProxyHeaders}}{{.ExtraConfig}}
+    }
+    {{ end }}
+}
+
+{{ if .SSL }}
+server {
+    listen 443 ssl reuseport;
+    listen [::]:443 ssl reuseport;
+    http2 on;
+    server_name {{.ServerNames}};
+
+    ssl_certificate     /etc/letsencrypt/live/{{.Primary}}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{.Primary}}/privkey.pem;
+
+    {{ if eq .Type "redirect" }}
+    location / { return 301 {{.RedirectTo}}$request_uri; }
+    {{ else }}
+    client_max_body_size {{.BodySize}};
+    location / {
+        proxy_pass http://{{.UpstreamName}};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";{{.ProxyHeaders}}{{.ExtraConfig}}
+    }
+    {{ end }}
+}
+{{ end }}
