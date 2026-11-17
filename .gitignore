@@ -1,0 +1,10 @@
+.env
+certbot/
+nginx/conf.d/*.conf
+!nginx/conf.d/.gitkeep
+!nginx/conf.d/.gitignore
+
+*.log
+.DS_Store
+.idea/
+.vscode/
