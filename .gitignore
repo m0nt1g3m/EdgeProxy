@@ -1,9 +1,9 @@
 docker-compose.yml
 .env
-nginx/conf.d/*.conf
 certbot/
+nginx/conf.d/*.conf
 *.log
-
+!nginx/conf.d/.gitkeep
 edgeproxy
 
 .idea/
