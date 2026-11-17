@@ -10,7 +10,7 @@ tasks:
     cmds:
       - test -f .env || cp .env.example .env
       - docker network inspect proxy_net >/dev/null 2>&1 || docker network create proxy_net
-      - echo "Edit .env (EMAIL), then run: task up"
+      - 'echo "Edit .env (EMAIL), then run: task up"'
 
   up:
     desc: Start EdgeProxy
