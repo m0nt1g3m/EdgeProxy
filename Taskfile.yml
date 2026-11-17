@@ -45,14 +45,16 @@ tasks:
     cmds:
       - ./{{.BINARY_NAME}}
 
+  down:
+    desc: Stop Docker services
+    cmds:
+      - docker compose down
+      - docker ps -aq --filter "name=edgeproxy-hostrelay-" | while read id; do docker rm -f "$id"; done
+
   clean:
     desc: Remove built binary and local Docker config
     cmds:
       - rm -f {{.BINARY_NAME}}
       - rm -f docker-compose.yml
       - rm -f .env
-
-  down:
-    desc: Stop Docker services
-    cmds:
-      - docker compose down
+      - docker ps -aq --filter "name=edgeproxy-hostrelay-" | while read id; do docker rm -f "$id"; done

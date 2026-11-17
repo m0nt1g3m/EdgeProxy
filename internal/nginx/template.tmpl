@@ -2,15 +2,15 @@
 upstream {{.UpstreamName}} {
     zone {{.UpstreamName}} 64k;
     least_conn;
-    server {{.Upstream}} resolve;
+    server {{.Upstream}}{{if .Resolve}} resolve{{end}};
     keepalive 64;
     resolver 127.0.0.11 valid=10s ipv6=off;
 }
 {{ end }}
 
 server {
-    listen 80 reuseport;
-    listen [::]:80 reuseport;
+    listen 80;
+    listen [::]:80;
     server_name {{.ServerNames}};
 
     location /.well-known/acme-challenge/ { root /var/www/certbot; }
@@ -31,8 +31,8 @@ server {
 
 {{ if .SSL }}
 server {
-    listen 443 ssl reuseport;
-    listen [::]:443 ssl reuseport;
+    listen 443 ssl;
+    listen [::]:443 ssl;
     http2 on;
     server_name {{.ServerNames}};
 

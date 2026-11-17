@@ -20,6 +20,8 @@ type ConfigData struct {
 	RedirectTo   string
 	BodySize     string
 	SSL          bool
+	Resolve      bool
+	RelayPort    string
 	ProxyHeaders string
 	ExtraConfig  string
 }

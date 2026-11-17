@@ -36,18 +36,25 @@ func (m *Manager) Deploy(data nginx.ConfigData) error {
 	if isNewCert {
 		if err := m.createDummyCert(data.Primary); err != nil {
 			os.Remove(confPath)
-			return err
+			return fmt.Errorf("failed to create temporary certificate: %w", err)
 		}
 	}
 
-	if _, err := m.Compose.Run("exec", "-T", "nginx", "nginx", "-t"); err != nil {
-		os.Remove(confPath)
-		return fmt.Errorf("nginx config test failed, rolled back: %w", err)
+	if data.RelayPort != "" {
+		if err := m.ensureHostRelay(data.RelayPort); err != nil {
+			os.Remove(confPath)
+			return fmt.Errorf("failed to expose 127.0.0.1:%s to the proxy: %w", data.RelayPort, err)
+		}
 	}
 
-	if _, err := m.Compose.Run("exec", "-T", "nginx", "nginx", "-s", "reload"); err != nil {
+	if out, err := m.Compose.Run("exec", "-T", "nginx", "nginx", "-t"); err != nil {
 		os.Remove(confPath)
-		return fmt.Errorf("nginx reload failed: %w", err)
+		return fmt.Errorf("nginx config test failed, rolled back: %w\n%s", err, strings.TrimSpace(out))
+	}
+
+	if out, err := m.Compose.Run("exec", "-T", "nginx", "nginx", "-s", "reload"); err != nil {
+		os.Remove(confPath)
+		return fmt.Errorf("nginx reload failed: %w\n%s", err, strings.TrimSpace(out))
 	}
 
 	if isNewCert {
@@ -78,8 +85,11 @@ func (m *Manager) createDummyCert(domain string) error {
 	-out    /etc/letsencrypt/live/%s/fullchain.pem \
 	-subj '/CN=%s' 2>/dev/null`, domain, domain, domain, domain)
 
-	_, err := m.Compose.Run("run", "--rm", "--entrypoint", "sh", "certbot", "-c", script)
-	return err
+	out, err := m.Compose.Run("run", "--rm", "--entrypoint", "sh", "certbot", "-c", script)
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, strings.TrimSpace(out))
+	}
+	return nil
 }
 
 func (m *Manager) issueCert(data nginx.ConfigData, dryRun bool) error {
@@ -95,6 +105,9 @@ func (m *Manager) issueCert(data nginx.ConfigData, dryRun bool) error {
 		args = append(args, "-d", strings.TrimSpace(d))
 	}
 
-	_, err := m.Compose.Run(args...)
-	return err
+	out, err := m.Compose.Run(args...)
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, strings.TrimSpace(out))
+	}
+	return nil
 }

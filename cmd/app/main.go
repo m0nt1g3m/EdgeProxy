@@ -1,12 +1,14 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"EdgeProxy/internal/cli"
 	"EdgeProxy/internal/deploy"
+	"EdgeProxy/internal/nginx"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/huh/spinner"
@@ -22,6 +24,15 @@ var (
 )
 
 func main() {
+	domainFlag := flag.String("domain", "", "comma-separated domain(s); enables non-interactive mode")
+	typeFlag := flag.String("type", "proxy", "service type: proxy, websocket, stream, redirect")
+	upstreamFlag := flag.String("upstream", "", "upstream host:port")
+	redirectFlag := flag.String("redirect", "", "redirect target (with -type=redirect)")
+	bodySizeFlag := flag.String("body-size", "10M", "max request body size")
+	sslFlag := flag.Bool("ssl", false, "issue a Let's Encrypt certificate")
+	yesFlag := flag.Bool("yes", false, "skip the confirmation prompt")
+	flag.Parse()
+
 	if _, err := os.Stat("docker-compose.yml"); err != nil {
 		fmt.Println(errStyle.Render("WARNING: docker-compose.yml is missing. Create it before running EdgeProxy."))
 	}
@@ -45,7 +56,13 @@ func main() {
 	fmt.Printf("\n  %s %s\n", titleStyle.Render("EDGEPROXY"), dimStyle.Render("v1.0.0"))
 	fmt.Printf("  %s\n\n", dimStyle.Render("Add a new domain to the reverse proxy"))
 
-	data, err := cli.RunInteractive()
+	var data nginx.ConfigData
+	var err error
+	if *domainFlag != "" {
+		data, err = cli.BuildConfig(*domainFlag, *typeFlag, *upstreamFlag, *redirectFlag, *bodySizeFlag, *sslFlag)
+	} else {
+		data, err = cli.RunInteractive()
+	}
 	if err != nil {
 		fmt.Println(errStyle.Render("✖ Aborted: " + err.Error()))
 		os.Exit(1)
@@ -57,8 +74,10 @@ func main() {
 	fmt.Printf("  ➜  Upstream:  %s\n", data.Upstream)
 	fmt.Printf("  ➜  SSL:       %v\n\n", data.SSL)
 
-	var confirm bool
-	huh.NewConfirm().Title("Proceed with deployment?").Value(&confirm).Run()
+	var confirm = *yesFlag
+	if !confirm {
+		huh.NewConfirm().Title("Proceed with deployment?").Value(&confirm).Run()
+	}
 	if !confirm {
 		fmt.Println("  Aborted.")
 		os.Exit(0)

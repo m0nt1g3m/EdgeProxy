@@ -1,12 +1,96 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 
 	"EdgeProxy/internal/nginx"
 
 	"github.com/charmbracelet/huh"
 )
+
+// BuildConfig turns raw values from the interactive form or command line flags
+// into nginx configuration data.
+func BuildConfig(domains, kind, upstream, redirectTo, bodySize string, ssl bool) (nginx.ConfigData, error) {
+	domainList := strings.Split(domains, ",")
+	for i := range domainList {
+		domainList[i] = strings.TrimSpace(domainList[i])
+	}
+	domainList = removeEmpty(domainList)
+	if len(domainList) == 0 {
+		return nginx.ConfigData{}, fmt.Errorf("at least one domain is required")
+	}
+
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		kind = "proxy"
+	}
+
+	switch kind {
+	case "proxy", "websocket", "stream":
+		if strings.TrimSpace(upstream) == "" {
+			return nginx.ConfigData{}, fmt.Errorf("upstream host:port is required for %s", kind)
+		}
+	case "redirect":
+		if strings.TrimSpace(redirectTo) == "" {
+			return nginx.ConfigData{}, fmt.Errorf("redirect target is required for redirect")
+		}
+	default:
+		return nginx.ConfigData{}, fmt.Errorf("unknown service type %q", kind)
+	}
+
+	if strings.TrimSpace(bodySize) == "" {
+		bodySize = "10M"
+	}
+
+	primary := domainList[0]
+	upstreamName := "up_" + strings.NewReplacer(".", "_", "-", "_").Replace(primary)
+	resolvedUpstream, relayPort, resolve := nginx.NormalizeUpstream(upstream)
+
+	data := nginx.ConfigData{
+		Domains:      strings.Join(domainList, ","),
+		ServerNames:  strings.Join(domainList, " "),
+		Primary:      primary,
+		Type:         kind,
+		Upstream:     resolvedUpstream,
+		UpstreamName: upstreamName,
+		RedirectTo:   redirectTo,
+		BodySize:     bodySize,
+		SSL:          ssl,
+		Resolve:      resolve,
+		RelayPort:    relayPort,
+		ProxyHeaders: `
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;`,
+	}
+
+	if kind == "websocket" {
+		data.ExtraConfig = `
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;`
+	} else if kind == "stream" {
+		data.ExtraConfig = `
+        proxy_buffering         off;
+        proxy_request_buffering off;`
+		data.BodySize = "0"
+	}
+
+	return data, nil
+}
+
+func removeEmpty(values []string) []string {
+	result := values[:0]
+	for _, value := range values {
+		if value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
 
 func RunInteractive() (nginx.ConfigData, error) {
 	var (
@@ -65,42 +149,5 @@ func RunInteractive() (nginx.ConfigData, error) {
 		return nginx.ConfigData{}, err
 	}
 
-	domainList := strings.Split(domains, ",")
-	for i := range domainList {
-		domainList[i] = strings.TrimSpace(domainList[i])
-	}
-	primary := domainList[0]
-	upstreamName := "up_" + strings.NewReplacer(".", "_", "-", "_").Replace(primary)
-
-	data := nginx.ConfigData{
-		Domains:      strings.Join(domainList, ","),
-		ServerNames:  strings.Join(domainList, " "),
-		Primary:      primary,
-		Type:         kind,
-		Upstream:     upstream,
-		UpstreamName: upstreamName,
-		RedirectTo:   redirectTo,
-		BodySize:     bodySize,
-		SSL:          ssl,
-		ProxyHeaders: `
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;`,
-	}
-
-	if kind == "websocket" {
-		data.ExtraConfig = `
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade    $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 3600s;`
-	} else if kind == "stream" {
-		data.ExtraConfig = `
-        proxy_buffering         off;
-        proxy_request_buffering off;`
-		data.BodySize = "0"
-	}
-
-	return data, nil
+	return BuildConfig(domains, kind, upstream, redirectTo, bodySize, ssl)
 }

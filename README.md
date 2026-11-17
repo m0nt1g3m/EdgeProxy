@@ -55,6 +55,40 @@ The app asks for:
 
 Then it writes a config into `nginx/conf.d/` and reloads nginx. Certificates are stored under `certbot/conf`.
 
+## Non-interactive mode
+
+Pass `-domain` to skip the interactive form. This is useful for scripts and for
+re-adding domains after a server rebuild:
+
+```bash
+# Normal reverse proxy
+./edgeproxy -domain proxy.example.com -type proxy -upstream 127.0.0.1:8080 -ssl -yes
+
+# Streaming upstream (disables proxy buffering, like Caddy's flush_interval -1)
+./edgeproxy -domain s3.example.com -type stream -upstream 127.0.0.1:18080 -ssl -yes
+
+# Redirect
+./edgeproxy -domain www.example.com -type redirect -redirect https://example.com -ssl -yes
+```
+
+Use `./edgeproxy -h` for all flags.
+
+## Loopback upstreams
+
+The nginx container cannot reach `127.0.0.1` on the host: inside the container
+that address points to nginx itself. EdgeProxy therefore rewrites loopback
+upstreams (`127.0.0.1`, `localhost`, `[::1]`) to `host.docker.internal` and
+starts a small `edgeproxy-hostrelay-<port>` container. The relay runs in the
+host network namespace, listens on the Docker host gateway, and forwards to the
+loopback service. The upstream service stays bound to `127.0.0.1`.
+
+If the host runs UFW, allow the `proxy_net` subnet to reach those relay ports:
+
+```bash
+SUBNET=$(docker network inspect proxy_net --format '{{(index .IPAM.Config 0).Subnet}}')
+sudo ufw allow from "$SUBNET" to any port 8080 proto tcp
+```
+
 ## Main files
 
 - `docker-compose.example.yml` — nginx + certbot setup

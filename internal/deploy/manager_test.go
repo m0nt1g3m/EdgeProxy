@@ -106,3 +106,88 @@ func TestDeployCreatesDummyCertBeforeNginxValidation(t *testing.T) {
 		t.Fatalf("expected dummy cert creation before nginx validation, got: %q", content)
 	}
 }
+
+func TestDeployReportsNginxTestOutput(t *testing.T) {
+	dir := t.TempDir()
+	stubPath := filepath.Join(dir, "docker")
+	script := `#!/bin/sh
+case "$*" in
+  *"exec -T nginx nginx -t"*)
+    echo "nginx: [emerg] duplicate listen options for 0.0.0.0:80"
+    exit 1
+    ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(stubPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	confDir := filepath.Join(dir, "nginx", "conf.d")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir conf dir: %v", err)
+	}
+
+	manager := NewManager(dir, "admin@example.com")
+	data := nginx.ConfigData{
+		Domains:      "example.com",
+		ServerNames:  "example.com",
+		Primary:      "example.com",
+		Type:         "proxy",
+		Upstream:     "app:8080",
+		UpstreamName: "up_example_com",
+		BodySize:     "10M",
+	}
+
+	err := manager.Deploy(data)
+	if err == nil {
+		t.Fatal("expected Deploy to fail")
+	}
+	if !strings.Contains(err.Error(), "duplicate listen options") {
+		t.Fatalf("expected nginx output in error, got: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(confDir, "example.com.conf")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected failed config to be rolled back")
+	}
+}
+
+func TestEnsureHostRelayStartsSocatOnHostGateway(t *testing.T) {
+	dir, logPath := writeDockerStub(t)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// Simulate a missing relay container so the run command is exercised.
+	stubPath := filepath.Join(dir, "docker")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "` + logPath + `"
+case "$*" in
+  "inspect "*) exit 1 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(stubPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+
+	manager := NewManager(dir, "admin@example.com")
+	if err := manager.ensureHostRelay("8080"); err != nil {
+		t.Fatalf("ensureHostRelay returned error: %v", err)
+	}
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+
+	content := string(got)
+	for _, want := range []string{
+		"run -d --name edgeproxy-hostrelay-8080",
+		"--network host",
+		"alpine/socat:latest",
+		"TCP-LISTEN:8080,bind=$B,reuseaddr,fork TCP:127.0.0.1:8080",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("relay command missing %q\n%s", want, content)
+		}
+	}
+}
