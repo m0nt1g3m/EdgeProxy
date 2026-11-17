@@ -22,11 +22,22 @@ var (
 )
 
 func main() {
+	if _, err := os.Stat("docker-compose.yml"); err != nil {
+		fmt.Println(errStyle.Render("WARNING: docker-compose.yml is missing. Create it before running EdgeProxy."))
+	}
+
+	if _, err := os.Stat(".env"); err != nil {
+		fmt.Println(errStyle.Render("WARNING: .env is missing. Create it with EMAIL=you@example.com before deployment."))
+	}
+
 	_ = godotenv.Load(".env")
 	email := os.Getenv("EMAIL")
 	if email == "" {
 		fmt.Println(errStyle.Render("✖ EMAIL is not set in .env"))
 		os.Exit(1)
+	}
+	if email == "you@example.com" {
+		fmt.Println(errStyle.Render("WARNING: EMAIL is still the sample value. Update .env to a real email before issuing certificates."))
 	}
 
 	edgeDir, _ := os.Getwd()
