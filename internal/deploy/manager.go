@@ -32,17 +32,17 @@ func (m *Manager) Deploy(data nginx.ConfigData) error {
 		return fmt.Errorf("failed to generate config: %w", err)
 	}
 
-	if _, err := m.Compose.Run("exec", "-T", "nginx", "nginx", "-t"); err != nil {
-		os.Remove(confPath)
-		return fmt.Errorf("nginx config test failed, rolled back: %w", err)
-	}
-
 	isNewCert := data.SSL && !m.certExists(data.Primary)
 	if isNewCert {
 		if err := m.createDummyCert(data.Primary); err != nil {
 			os.Remove(confPath)
 			return err
 		}
+	}
+
+	if _, err := m.Compose.Run("exec", "-T", "nginx", "nginx", "-t"); err != nil {
+		os.Remove(confPath)
+		return fmt.Errorf("nginx config test failed, rolled back: %w", err)
 	}
 
 	if _, err := m.Compose.Run("exec", "-T", "nginx", "nginx", "-s", "reload"); err != nil {
