@@ -27,12 +27,18 @@ func writeDockerStub(t *testing.T) (string, string) {
 func TestCertExistsReportsFilesInRenewalDir(t *testing.T) {
 	edgeDir := t.TempDir()
 	renewalDir := filepath.Join(edgeDir, "certbot", "conf", "renewal")
-	if err := os.MkdirAll(renewalDir, 0o755); err != nil {
-		t.Fatalf("mkdir renewal dir: %v", err)
+	liveDir := filepath.Join(edgeDir, "certbot", "conf", "live", "example.com")
+	for _, dir := range []string{renewalDir, liveDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
 	}
 
 	if err := os.WriteFile(filepath.Join(renewalDir, "example.com.conf"), []byte("renewal"), 0o644); err != nil {
 		t.Fatalf("write cert file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(liveDir, "fullchain.pem"), []byte("cert"), 0o644); err != nil {
+		t.Fatalf("write fullchain file: %v", err)
 	}
 
 	manager := NewManager(edgeDir, "admin@example.com")
@@ -41,6 +47,13 @@ func TestCertExistsReportsFilesInRenewalDir(t *testing.T) {
 	}
 	if manager.certExists("missing.example.com") {
 		t.Fatal("expected missing certificate to be reported as absent")
+	}
+
+	if err := os.WriteFile(filepath.Join(renewalDir, "empty.example.com.conf"), nil, 0o644); err != nil {
+		t.Fatalf("write empty renewal file: %v", err)
+	}
+	if manager.certExists("empty.example.com") {
+		t.Fatal("expected empty renewal file to be treated as missing")
 	}
 }
 

@@ -73,9 +73,15 @@ func (m *Manager) Deploy(data nginx.ConfigData) error {
 }
 
 func (m *Manager) certExists(domain string) bool {
-	path := filepath.Join(m.EdgeDir, "certbot", "conf", "renewal", domain+".conf")
-	_, err := os.Stat(path)
-	return err == nil
+	renewalPath := filepath.Join(m.EdgeDir, "certbot", "conf", "renewal", domain+".conf")
+	info, err := os.Stat(renewalPath)
+	if err != nil || info.Size() == 0 {
+		return false
+	}
+
+	fullchainPath := filepath.Join(m.EdgeDir, "certbot", "conf", "live", domain, "fullchain.pem")
+	info, err = os.Stat(fullchainPath)
+	return err == nil && info.Size() > 0
 }
 
 func (m *Manager) createDummyCert(domain string) error {
