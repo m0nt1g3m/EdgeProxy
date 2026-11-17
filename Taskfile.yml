@@ -1,80 +1,23 @@
 version: '3'
 
 vars:
-  COMPOSE: docker compose
-  SCRIPTS: ./scripts
+  BINARY_NAME: edgeproxy
+  VERSION: 1.0.0
+  LDFLAGS: -s -w -X main.Version={{.VERSION}}
 
 tasks:
-  init:
-    desc: First-time setup (.env, proxy_net)
+  default:
+    desc: List available tasks
     cmds:
-      - test -f .env || cp .env.example .env
-      - docker network inspect proxy_net >/dev/null 2>&1 || docker network create proxy_net
-      - 'echo "Edit .env (EMAIL), then run: task up"'
+      - task --list
 
-  up:
-    desc: Start EdgeProxy
+  build:
+    desc: Build EdgeProxy binary for current OS
     cmds:
-      - docker network inspect proxy_net >/dev/null 2>&1 || docker network create proxy_net
-      - '{{.COMPOSE}} up -d'
+      - CGO_ENABLED=0 go build -ldflags "{{.LDFLAGS}}" -o {{.BINARY_NAME}} ./cmd/app/main.go
+      - echo "Built ./{{.BINARY_NAME}}"
 
-  down:
-    desc: Stop EdgeProxy (volumes kept)
+  clean:
+    desc: Remove built binary
     cmds:
-      - '{{.COMPOSE}} down'
-
-  restart:
-    desc: Restart EdgeProxy
-    cmds:
-      - '{{.COMPOSE}} restart'
-
-  reload:
-    desc: Reload nginx config (no downtime)
-    cmds:
-      - '{{.COMPOSE}} exec nginx nginx -s reload'
-
-  test:
-    desc: Validate nginx config
-    cmds:
-      - '{{.COMPOSE}} exec nginx nginx -t'
-
-  ps:
-    desc: Show containers
-    cmds:
-      - '{{.COMPOSE}} ps'
-
-  logs:
-    desc: "Follow logs: task logs -- nginx"
-    cmds:
-      - '{{.COMPOSE}} logs -f {{.CLI_ARGS}}'
-
-  add-domain:
-    desc: "Interactively add a domain (runs scripts/add-domain.sh)"
-    interactive: true
-    cmds:
-      - '{{.SCRIPTS}}/add-domain.sh'
-
-  list-domains:
-    desc: List configured domains
-    cmds:
-      - |
-        cd nginx/conf.d
-        for f in *.conf; do
-          [ -e "$f" ] || { echo "(no domains configured)"; exit 0; }
-          echo "--- $f"
-          grep -E '^\s*server_name' "$f" | sed 's/^\s*//'
-        done
-
-  remove-domain:
-    desc: "Remove domain config: task remove-domain -- grippy.work.gd"
-    cmds:
-      - rm -f nginx/conf.d/{{.CLI_ARGS}}.conf
-      - '{{.COMPOSE}} exec nginx nginx -t'
-      - '{{.COMPOSE}} exec nginx nginx -s reload'
-      - echo "Removed {{.CLI_ARGS}}. Certificate remains in certbot/conf/live/ — delete manually if needed."
-
-  renew:
-    desc: Force-renew all certificates + reload
-    cmds:
-      - '{{.COMPOSE}} run --rm --entrypoint certbot certbot renew --force-renewal'
-      - '{{.COMPOSE}} exec nginx nginx -s reload'
+      - rm -f {{.BINARY_NAME}}

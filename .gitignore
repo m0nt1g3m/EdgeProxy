@@ -1,10 +1,12 @@
+docker-compose.yml
 .env
-certbot/
 nginx/conf.d/*.conf
-!nginx/conf.d/.gitkeep
-!nginx/conf.d/.gitignore
-
+certbot/
 *.log
-.DS_Store
+
+edgeproxy
+
 .idea/
 .vscode/
+*.swp
+.DS_Store
