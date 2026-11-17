@@ -72,6 +72,9 @@ func main() {
 	fmt.Printf("  ➜  Domain:    %s\n", data.Domains)
 	fmt.Printf("  ➜  Type:      %s\n", data.Type)
 	fmt.Printf("  ➜  Upstream:  %s\n", data.Upstream)
+	if data.RelayPort != "" {
+		fmt.Printf("  ➜  Host relay: 127.0.0.1:%s -> host.docker.internal:%s\n", data.RelayPort, data.RelayPort)
+	}
 	fmt.Printf("  ➜  SSL:       %v\n\n", data.SSL)
 
 	var confirm = *yesFlag
