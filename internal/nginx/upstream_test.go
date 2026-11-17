@@ -2,6 +2,64 @@ package nginx
 
 import "testing"
 
+func TestParseServers(t *testing.T) {
+	servers, err := ParseServers("app1:8080, app2:8080 weight=2 max_fails=5 fail_timeout=30s, 127.0.0.1:9000 backup")
+	if err != nil {
+		t.Fatalf("ParseServers returned error: %v", err)
+	}
+
+	if len(servers) != 3 {
+		t.Fatalf("got %d servers, want 3", len(servers))
+	}
+
+	first := servers[0]
+	if first.Address != "app1:8080" || !first.Resolve {
+		t.Fatalf("first server = %+v", first)
+	}
+	if first.MaxFails != DefaultMaxFails || first.FailTimeout != DefaultFailTimeout {
+		t.Fatalf("first defaults = %+v", first)
+	}
+
+	second := servers[1]
+	if second.Weight != 2 || second.MaxFails != 5 || second.FailTimeout != "30s" {
+		t.Fatalf("second server = %+v", second)
+	}
+
+	third := servers[2]
+	if third.Address != "host.docker.internal:9000" || third.RelayPort != "9000" || !third.Backup {
+		t.Fatalf("third server = %+v", third)
+	}
+}
+
+func TestParseServersRejectsInvalidOptions(t *testing.T) {
+	for _, input := range []string{
+		"app:8080 weight=0",
+		"app:8080 weight",
+		"app:8080 max_fails=-1",
+		"app:8080 fail_timeout=soon",
+		"app:8080 mystery=1",
+		"",
+	} {
+		if _, err := ParseServers(input); err == nil {
+			t.Fatalf("expected error for %q", input)
+		}
+	}
+}
+
+func TestRelayPortsAreDeduplicated(t *testing.T) {
+	data := ConfigData{Servers: []Server{
+		{Address: "host.docker.internal:8080", RelayPort: "8080"},
+		{Address: "host.docker.internal:8080", RelayPort: "8080"},
+		{Address: "host.docker.internal:9000", RelayPort: "9000"},
+		{Address: "app:8080"},
+	}}
+
+	ports := data.RelayPorts()
+	if len(ports) != 2 || ports[0] != "8080" || ports[1] != "9000" {
+		t.Fatalf("relay ports = %v", ports)
+	}
+}
+
 func TestNormalizeUpstream(t *testing.T) {
 	tests := []struct {
 		name      string

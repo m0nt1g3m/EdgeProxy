@@ -1,53 +1,124 @@
-{{ if ne .Type "redirect" }}
-upstream {{.UpstreamName}} {
-    zone {{.UpstreamName}} 64k;
-    least_conn;
-    server {{.Upstream}}{{if .Resolve}} resolve{{end}};
-    keepalive 64;
+{{- if .HasUpstream }}
+{{- if gt .RateLimit 0 }}
+limit_req_zone $binary_remote_addr zone={{ .UpstreamName }}_req:10m rate={{ .RateLimit }}r/s;
+{{- end }}
+{{- if gt .ConnLimit 0 }}
+limit_conn_zone $binary_remote_addr zone={{ .UpstreamName }}_conn:10m;
+{{- end }}
+{{- if .CacheTTL }}
+map $http_authorization ${{ .UpstreamName }}_noauth {
+    default 1;
+    ""      0;
+}
+map $http_cookie ${{ .UpstreamName }}_nocookie {
+    default 1;
+    ""      0;
+}
+map $upstream_http_set_cookie ${{ .UpstreamName }}_hassetcookie {
+    default 1;
+    ""      0;
+}
+proxy_cache_path /var/cache/nginx/{{ .UpstreamName }} levels=1:2 keys_zone={{ .UpstreamName }}_cache:10m max_size=1g inactive=60m use_temp_path=off;
+{{- end }}
+
+upstream {{ .UpstreamName }} {
+    zone {{ .UpstreamName }} 64k;
+{{- with .BalanceDirective }}
+    {{ . }}
+{{- end }}
+{{- range .Servers }}
+    server {{ .Directive }};
+{{- end }}
+{{- if gt .Keepalive 0 }}
+    keepalive {{ .Keepalive }};
+    keepalive_requests 1000;
+    keepalive_timeout 60s;
+{{- end }}
     resolver 127.0.0.11 valid=10s ipv6=off;
 }
-{{ end }}
+{{- end }}
 
 server {
     listen 80;
     listen [::]:80;
-    server_name {{.ServerNames}};
+    server_name {{ .ServerNames }};
 
     location /.well-known/acme-challenge/ { root /var/www/certbot; }
 
-    {{ if .SSL }}
+{{- if .SSL }}
     location / { return 301 https://$host$request_uri; }
-    {{ else if eq .Type "redirect" }}
-    location / { return 301 {{.RedirectTo}}$request_uri; }
-    {{ else }}
-    client_max_body_size {{.BodySize}};
+{{- else if eq .Type "redirect" }}
+    location / { return 301 {{ .RedirectTo }}$request_uri; }
+{{- else }}
+    client_max_body_size {{ .BodySize }};
     location / {
-        proxy_pass http://{{.UpstreamName}};
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";{{.ProxyHeaders}}{{.ExtraConfig}}
+{{ template "proxy_location" . }}
     }
-    {{ end }}
+{{- end }}
 }
 
-{{ if .SSL }}
+{{- if .SSL }}
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
     http2 on;
-    server_name {{.ServerNames}};
+    server_name {{ .ServerNames }};
 
-    ssl_certificate     /etc/letsencrypt/live/{{.Primary}}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/{{.Primary}}/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/{{ .Primary }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ .Primary }}/privkey.pem;
 
-    {{ if eq .Type "redirect" }}
-    location / { return 301 {{.RedirectTo}}$request_uri; }
-    {{ else }}
-    client_max_body_size {{.BodySize}};
+{{- if eq .Type "redirect" }}
+    location / { return 301 {{ .RedirectTo }}$request_uri; }
+{{- else }}
+    client_max_body_size {{ .BodySize }};
     location / {
-        proxy_pass http://{{.UpstreamName}};
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";{{.ProxyHeaders}}{{.ExtraConfig}}
+{{ template "proxy_location" . }}
     }
-    {{ end }}
+{{- end }}
 }
-{{ end }}
+{{- end }}
+
+{{- define "proxy_location" }}
+        proxy_pass http://{{ .UpstreamName }};
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+{{- if eq .Type "websocket" }}
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        "upgrade";
+{{- else }}
+        proxy_set_header Connection        "";
+{{- end }}
+        proxy_socket_keepalive on;
+        proxy_connect_timeout {{ .ConnectTimeout }};
+        proxy_send_timeout    {{ .SendTimeout }};
+        proxy_read_timeout    {{ .ReadTimeout }};
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+{{- if gt .NextUpstreamTries 0 }}
+        proxy_next_upstream_tries {{ .NextUpstreamTries }};
+{{- end }}
+        proxy_next_upstream_timeout {{ .NextUpstreamWindow }};
+{{- if gt .RateLimit 0 }}
+        limit_req zone={{ .UpstreamName }}_req burst={{ .RateBurst }} nodelay;
+{{- end }}
+{{- if gt .ConnLimit 0 }}
+        limit_conn {{ .UpstreamName }}_conn {{ .ConnLimit }};
+{{- end }}
+{{- if .CacheTTL }}
+        proxy_cache {{ .UpstreamName }}_cache;
+        proxy_cache_valid 200 301 302 {{ .CacheTTL }};
+        proxy_cache_lock on;
+        proxy_cache_background_update on;
+        proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+        proxy_cache_bypass ${{ .UpstreamName }}_noauth ${{ .UpstreamName }}_nocookie;
+        proxy_no_cache ${{ .UpstreamName }}_noauth ${{ .UpstreamName }}_nocookie ${{ .UpstreamName }}_hassetcookie;
+        add_header X-Cache-Status $upstream_cache_status always;
+{{- end }}
+{{- if eq .Type "stream" }}
+        proxy_buffering         off;
+        proxy_request_buffering off;
+{{- end }}
+{{- end }}

@@ -24,6 +24,20 @@ func writeDockerStub(t *testing.T) (string, string) {
 	return dir, logPath
 }
 
+func proxyData() nginx.ConfigData {
+	return nginx.ConfigData{
+		Domains: []string{"example.com"},
+		Type:    nginx.TypeProxy,
+		Servers: []nginx.Server{{
+			Address:     "app:8080",
+			MaxFails:    nginx.DefaultMaxFails,
+			FailTimeout: nginx.DefaultFailTimeout,
+			Resolve:     true,
+		}},
+		BodySize: "10M",
+	}
+}
+
 func TestCertExistsReportsFilesInRenewalDir(t *testing.T) {
 	edgeDir := t.TempDir()
 	renewalDir := filepath.Join(edgeDir, "certbot", "conf", "renewal")
@@ -62,9 +76,9 @@ func TestIssueCertBuildsDryRunCommand(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	manager := NewManager(dir, "admin@example.com")
-	data := nginx.ConfigData{Domains: "example.com, www.example.com"}
+	data := nginx.ConfigData{Domains: []string{"example.com", "www.example.com"}}
 
-	if err := manager.issueCert(data, true); err != nil {
+	if err := manager.issueCert(data, true, false); err != nil {
 		t.Fatalf("issueCert returned error: %v", err)
 	}
 
@@ -73,7 +87,7 @@ func TestIssueCertBuildsDryRunCommand(t *testing.T) {
 		t.Fatalf("read log: %v", err)
 	}
 
-	want := "compose run --rm --entrypoint certbot certbot certonly --webroot -w /var/www/certbot --email admin@example.com --agree-tos --no-eff-email --non-interactive --dry-run -d example.com -d www.example.com"
+	want := "compose run --rm --entrypoint certbot certbot certonly --webroot -w /var/www/certbot --cert-name example.com --expand --email admin@example.com --agree-tos --no-eff-email --non-interactive --dry-run -d example.com -d www.example.com"
 	if gotStr := strings.TrimSpace(string(got)); gotStr != want {
 		t.Fatalf("unexpected certbot args: %q\nwant: %q", gotStr, want)
 	}
@@ -89,16 +103,8 @@ func TestDeployCreatesDummyCertBeforeNginxValidation(t *testing.T) {
 	}
 
 	manager := NewManager(dir, "admin@example.com")
-	data := nginx.ConfigData{
-		Domains:      "example.com",
-		ServerNames:  "example.com",
-		Primary:      "example.com",
-		Type:         "proxy",
-		Upstream:     "app:8080",
-		UpstreamName: "up_example_com",
-		BodySize:     "10M",
-		SSL:          true,
-	}
+	data := proxyData()
+	data.SSL = true
 
 	if err := manager.Deploy(data); err != nil {
 		t.Fatalf("Deploy returned error: %v", err)
@@ -120,7 +126,7 @@ func TestDeployCreatesDummyCertBeforeNginxValidation(t *testing.T) {
 	}
 }
 
-func TestDeployReportsNginxTestOutput(t *testing.T) {
+func TestDeployReportsNginxTestOutputAndRollsBack(t *testing.T) {
 	dir := t.TempDir()
 	stubPath := filepath.Join(dir, "docker")
 	script := `#!/bin/sh
@@ -143,17 +149,8 @@ exit 0
 	}
 
 	manager := NewManager(dir, "admin@example.com")
-	data := nginx.ConfigData{
-		Domains:      "example.com",
-		ServerNames:  "example.com",
-		Primary:      "example.com",
-		Type:         "proxy",
-		Upstream:     "app:8080",
-		UpstreamName: "up_example_com",
-		BodySize:     "10M",
-	}
 
-	err := manager.Deploy(data)
+	err := manager.Deploy(proxyData())
 	if err == nil {
 		t.Fatal("expected Deploy to fail")
 	}
@@ -165,14 +162,72 @@ exit 0
 	}
 }
 
+func TestDeployRollsBackExistingConfigOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	stubPath := filepath.Join(dir, "docker")
+	script := `#!/bin/sh
+case "$*" in
+  *"exec -T nginx nginx -t"*) echo "nginx: [emerg] broken"; exit 1 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(stubPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	confDir := filepath.Join(dir, "nginx", "conf.d")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir conf dir: %v", err)
+	}
+	old := []byte("# previous config\n")
+	if err := os.WriteFile(filepath.Join(confDir, "example.com.conf"), old, 0o644); err != nil {
+		t.Fatalf("write old config: %v", err)
+	}
+
+	manager := NewManager(dir, "admin@example.com")
+	if err := manager.Deploy(proxyData()); err == nil {
+		t.Fatal("expected Deploy to fail")
+	}
+
+	restored, err := os.ReadFile(filepath.Join(confDir, "example.com.conf"))
+	if err != nil {
+		t.Fatalf("read restored config: %v", err)
+	}
+	if string(restored) != string(old) {
+		t.Fatalf("old config was not restored: %q", restored)
+	}
+}
+
+func TestDeploySavesSiteSettings(t *testing.T) {
+	dir, _ := writeDockerStub(t)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	manager := NewManager(dir, "admin@example.com")
+	if err := manager.Deploy(proxyData()); err != nil {
+		t.Fatalf("Deploy returned error: %v", err)
+	}
+
+	site, err := manager.Store.Load("example.com")
+	if err != nil {
+		t.Fatalf("Load site: %v", err)
+	}
+	if !site.Managed {
+		t.Fatal("expected site settings to be saved")
+	}
+	if len(site.Data.Servers) != 1 || site.Data.Servers[0].Address != "app:8080" {
+		t.Fatalf("saved servers = %+v", site.Data.Servers)
+	}
+}
+
 func TestIssueCertRemovesDummyLineageBeforeRealIssuance(t *testing.T) {
 	dir, logPath := writeDockerStub(t)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	manager := NewManager(dir, "admin@example.com")
-	data := nginx.ConfigData{Domains: "example.com", Primary: "example.com"}
+	data := nginx.ConfigData{Domains: []string{"example.com"}}
 
-	if err := manager.issueCert(data, false); err != nil {
+	if err := manager.issueCert(data, false, true); err != nil {
 		t.Fatalf("issueCert returned error: %v", err)
 	}
 
@@ -232,5 +287,77 @@ exit 0
 		if !strings.Contains(content, want) {
 			t.Fatalf("relay command missing %q\n%s", want, content)
 		}
+	}
+}
+
+func TestPruneUnusedRelays(t *testing.T) {
+	dir, logPath := writeDockerStub(t)
+	stubPath := filepath.Join(dir, "docker")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "` + logPath + `"
+case "$*" in
+  *"ps -a --filter name=edgeproxy-hostrelay-"*)
+    printf 'edgeproxy-hostrelay-8080\nedgeproxy-hostrelay-9090\n'
+    ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(stubPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	confDir := filepath.Join(dir, "nginx", "conf.d")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir conf dir: %v", err)
+	}
+	conf := "upstream up_example {\n    server host.docker.internal:8080;\n}\n"
+	if err := os.WriteFile(filepath.Join(confDir, "example.com.conf"), []byte(conf), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	manager := NewManager(dir, "admin@example.com")
+	manager.pruneUnusedRelays()
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	content := string(got)
+	if strings.Contains(content, "rm -f edgeproxy-hostrelay-8080") {
+		t.Fatalf("referenced relay must be kept: %s", content)
+	}
+	if !strings.Contains(content, "rm -f edgeproxy-hostrelay-9090") {
+		t.Fatalf("unreferenced relay must be removed: %s", content)
+	}
+}
+
+func TestDeleteRemovesConfigAndSettings(t *testing.T) {
+	dir, logPath := writeDockerStub(t)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	manager := NewManager(dir, "admin@example.com")
+	if err := manager.Deploy(proxyData()); err != nil {
+		t.Fatalf("Deploy returned error: %v", err)
+	}
+
+	if err := manager.Delete("example.com"); err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+
+	confPath := filepath.Join(dir, "nginx", "conf.d", "example.com.conf")
+	if _, err := os.Stat(confPath); !os.IsNotExist(err) {
+		t.Fatalf("expected config to be removed")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sites", "example.com.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected site settings to be removed")
+	}
+
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if !strings.Contains(string(got), "compose exec -T nginx nginx -s reload") {
+		t.Fatalf("expected nginx reload: %s", got)
 	}
 }
