@@ -118,7 +118,7 @@ func (s *Store) Load(domain string) (Site, error) {
 	// Keep the existing file name stable even if server_name lists a different
 	// domain first.
 	if data.Primary() != domain {
-		data.Domains = withPrimary(data.Domains, domain)
+		data.Domains = nginx.EnsurePrimary(data.Domains, domain)
 	}
 
 	return Site{Data: data, Managed: false}, nil
@@ -190,17 +190,6 @@ func (s *Store) Delete(domain string) error {
 		return fmt.Errorf("delete site settings: %w", err)
 	}
 	return nil
-}
-
-func withPrimary(domains []string, primary string) []string {
-	result := make([]string, 0, len(domains)+1)
-	result = append(result, primary)
-	for _, domain := range domains {
-		if !strings.EqualFold(domain, primary) {
-			result = append(result, domain)
-		}
-	}
-	return result
 }
 
 func validateName(domain string) error {

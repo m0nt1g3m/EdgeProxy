@@ -332,6 +332,146 @@ exit 0
 	}
 }
 
+func TestEditConfigAppliesAndRefreshesSettings(t *testing.T) {
+	dir, logPath := writeDockerStub(t)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	manager := NewManager(dir, "admin@example.com")
+	if err := manager.Deploy(proxyData()); err != nil {
+		t.Fatalf("Deploy returned error: %v", err)
+	}
+
+	edited := `upstream up_example_com {
+    least_conn;
+    server newapp:9090 max_fails=3 fail_timeout=10s;
+}
+
+server {
+    listen 80;
+    server_name example.com;
+    location / { proxy_pass http://up_example_com; }
+}
+`
+	result, err := manager.EditConfig("example.com", func(path string) error {
+		return os.WriteFile(path, []byte(edited), 0o644)
+	})
+	if err != nil {
+		t.Fatalf("EditConfig returned error: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected the edit to be reported as changed")
+	}
+	if !result.SettingsUpdated || result.SettingsErr != nil {
+		t.Fatalf("settings were not refreshed: %+v", result)
+	}
+
+	content, err := os.ReadFile(manager.Store.ConfPath("example.com"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(content), "server newapp:9090") {
+		t.Fatalf("edited config was not kept:\n%s", content)
+	}
+
+	site, err := manager.Store.Load("example.com")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(site.Data.Servers) != 1 || site.Data.Servers[0].Address != "newapp:9090" {
+		t.Fatalf("saved servers = %+v", site.Data.Servers)
+	}
+
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read docker log: %v", err)
+	}
+	for _, want := range []string{"compose exec -T nginx nginx -t", "compose exec -T nginx nginx -s reload"} {
+		if !strings.Contains(string(log), want) {
+			t.Fatalf("docker log missing %q:\n%s", want, log)
+		}
+	}
+}
+
+func TestEditConfigRestoresOriginalOnFailedTest(t *testing.T) {
+	dir := t.TempDir()
+	stubPath := filepath.Join(dir, "docker")
+	script := `#!/bin/sh
+case "$*" in
+  *"exec -T nginx nginx -t"*) echo "nginx: [emerg] invalid directive"; exit 1 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(stubPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	confDir := filepath.Join(dir, "nginx", "conf.d")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir conf dir: %v", err)
+	}
+	confPath, err := nginx.GenerateAndSave(confDir, proxyData())
+	if err != nil {
+		t.Fatalf("GenerateAndSave: %v", err)
+	}
+	original, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("read original: %v", err)
+	}
+
+	manager := NewManager(dir, "admin@example.com")
+	_, err = manager.EditConfig("example.com", func(path string) error {
+		return os.WriteFile(path, []byte("this is not nginx\n"), 0o644)
+	})
+	if err == nil {
+		t.Fatal("expected EditConfig to fail")
+	}
+	if !strings.Contains(err.Error(), "reverted") || !strings.Contains(err.Error(), "invalid directive") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	restored, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("read restored config: %v", err)
+	}
+	if string(restored) != string(original) {
+		t.Fatalf("original config was not restored:\n%s", restored)
+	}
+
+	rejected, err := os.ReadFile(confPath + ".rejected")
+	if err != nil {
+		t.Fatalf("expected rejected draft to be kept: %v", err)
+	}
+	if string(rejected) != "this is not nginx\n" {
+		t.Fatalf("unexpected rejected draft: %q", rejected)
+	}
+}
+
+func TestEditConfigWithoutChangesSkipsDocker(t *testing.T) {
+	dir, logPath := writeDockerStub(t)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	confDir := filepath.Join(dir, "nginx", "conf.d")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatalf("mkdir conf dir: %v", err)
+	}
+	if _, err := nginx.GenerateAndSave(confDir, proxyData()); err != nil {
+		t.Fatalf("GenerateAndSave: %v", err)
+	}
+
+	manager := NewManager(dir, "admin@example.com")
+	result, err := manager.EditConfig("example.com", func(string) error { return nil })
+	if err != nil {
+		t.Fatalf("EditConfig returned error: %v", err)
+	}
+	if result.Changed {
+		t.Fatal("expected no changes to be reported")
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no docker calls, log exists: %v", err)
+	}
+}
+
 func TestDeleteRemovesConfigAndSettings(t *testing.T) {
 	dir, logPath := writeDockerStub(t)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

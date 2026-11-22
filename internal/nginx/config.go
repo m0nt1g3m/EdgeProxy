@@ -257,6 +257,20 @@ func (c *ConfigData) ApplyDefaults() {
 	}
 }
 
+// EnsurePrimary moves primary to the front of the domain list and drops
+// duplicates, so the saved record, config file and certificate name stay
+// aligned.
+func EnsurePrimary(domains []string, primary string) []string {
+	result := make([]string, 0, len(domains)+1)
+	result = append(result, primary)
+	for _, domain := range domains {
+		if !strings.EqualFold(domain, primary) {
+			result = append(result, domain)
+		}
+	}
+	return result
+}
+
 // UpstreamName converts a domain into a stable nginx identifier.
 func UpstreamName(domain string) string {
 	return "up_" + strings.NewReplacer(".", "_", "-", "_", ":", "_").Replace(domain)

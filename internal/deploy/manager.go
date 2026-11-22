@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -141,6 +142,89 @@ func (m *Manager) apply(previous *nginx.ConfigData, data nginx.ConfigData) error
 	}
 
 	return nil
+}
+
+// ConfigEditResult describes a manual config edit.
+type ConfigEditResult struct {
+	Changed         bool
+	SettingsUpdated bool
+	// SettingsErr reports that the edited config is live but its saved
+	// settings could not be synced. It is a warning, not a deployment failure.
+	SettingsErr error
+}
+
+// EditConfig opens the generated nginx config through edit, then validates and
+// reloads it. On failure the previous config is restored and the rejected draft
+// is kept next to it as <name>.conf.rejected.
+func (m *Manager) EditConfig(domain string, edit func(path string) error) (ConfigEditResult, error) {
+	var result ConfigEditResult
+
+	confPath := m.Store.ConfPath(domain)
+	original, err := os.ReadFile(confPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return result, fmt.Errorf("%w: %s", state.ErrNotFound, domain)
+		}
+		return result, fmt.Errorf("read config: %w", err)
+	}
+
+	restore := func() {
+		_ = os.WriteFile(confPath, original, 0o644)
+	}
+
+	if err := edit(confPath); err != nil {
+		restore()
+		return result, fmt.Errorf("editor failed: %w", err)
+	}
+
+	edited, err := os.ReadFile(confPath)
+	if err != nil {
+		restore()
+		return result, fmt.Errorf("read edited config: %w", err)
+	}
+	if bytes.Equal(original, edited) {
+		return result, nil
+	}
+	result.Changed = true
+
+	reject := func() {
+		_ = os.WriteFile(confPath+".rejected", edited, 0o644)
+		restore()
+	}
+
+	if out, err := m.Compose.Run("exec", "-T", "nginx", "nginx", "-t"); err != nil {
+		reject()
+		return result, fmt.Errorf(
+			"nginx config test failed; changes reverted, draft saved to %s.rejected: %w\n%s",
+			confPath, err, strings.TrimSpace(out))
+	}
+
+	if out, err := m.Compose.Run("exec", "-T", "nginx", "nginx", "-s", "reload"); err != nil {
+		reject()
+		_, _ = m.Compose.Run("exec", "-T", "nginx", "nginx", "-s", "reload")
+		return result, fmt.Errorf(
+			"nginx reload failed; changes reverted, draft saved to %s.rejected: %w\n%s",
+			confPath, err, strings.TrimSpace(out))
+	}
+
+	defer m.pruneUnusedRelays()
+
+	data, parseErr := nginx.ParseConfig(confPath)
+	if parseErr != nil {
+		result.SettingsErr = fmt.Errorf("config is live, but its settings were not refreshed: %w", parseErr)
+		return result, nil
+	}
+
+	data.Domains = nginx.EnsurePrimary(data.Domains, domain)
+	data.ApplyDefaults()
+
+	if err := m.Store.Save(data); err != nil {
+		result.SettingsErr = fmt.Errorf("config is live, but saving its settings failed: %w", err)
+		return result, nil
+	}
+
+	result.SettingsUpdated = true
+	return result, nil
 }
 
 // Delete removes a site config and its saved settings.
