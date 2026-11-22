@@ -55,6 +55,8 @@ Running without action flags opens a menu:
 
 - **Add a new site** — domain, service type, upstreams, tuning, TLS.
 - **Edit site parameters** — change anything without recreating the site.
+- **Edit nginx config manually** — open the generated config in `$VISUAL`/`$EDITOR`,
+  validate it with `nginx -t`, and reload. Invalid edits are reverted.
 - **Delete a site** — removes the nginx config and saved settings, keeps certificates.
 - **List sites** — shows managed and imported sites.
 
@@ -79,11 +81,23 @@ it is imported automatically the first time you edit it.
 
 # Delete a site (certificate files are kept)
 ./edgeproxy -delete old.example.com -yes
+
+# Open the generated nginx config in $VISUAL/$EDITOR, validate and reload
+./edgeproxy -edit-config proxy.example.com
 ```
 
 When `-edit` is used without tuning flags, the interactive edit form opens.
 Unspecified flags keep their current values; specify `-ssl=false` explicitly to
 disable TLS.
+
+`-edit-config` is the escape hatch for nginx directives EdgeProxy does not model.
+The editor is taken from `VISUAL`, then `EDITOR`, and falls back to `vi`. After
+the editor exits, EdgeProxy runs `nginx -t` and reloads nginx only if the config
+is valid. On failure the previous config is restored, the rejected draft is kept
+as `nginx/conf.d/<domain>.conf.rejected`, and nginx keeps serving the old
+configuration. After a successful edit the saved site settings are refreshed
+from the new config when it can be parsed, so the regular edit form stays in
+sync.
 
 ## Non-interactive mode
 

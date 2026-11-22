@@ -415,6 +415,7 @@ func RunMenu() (string, error) {
 			Options(
 				huh.NewOption("Add a new site", "add"),
 				huh.NewOption("Edit site parameters", "edit"),
+				huh.NewOption("Edit nginx config manually", "config"),
 				huh.NewOption("Delete a site", "delete"),
 				huh.NewOption("List sites", "list"),
 			).

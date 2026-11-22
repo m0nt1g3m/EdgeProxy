@@ -38,6 +38,7 @@ var (
 type options struct {
 	domain    string
 	edit      string
+	editRaw   string
 	del       string
 	list      bool
 	service   string
@@ -65,6 +66,7 @@ func main() {
 
 	flag.StringVar(&opts.domain, "domain", "", "comma-separated domain(s) for a new site")
 	flag.StringVar(&opts.edit, "edit", "", "edit an existing site by primary domain")
+	flag.StringVar(&opts.editRaw, "edit-config", "", "edit the generated nginx config for a site by hand")
 	flag.StringVar(&opts.del, "delete", "", "delete a site by primary domain")
 	flag.BoolVar(&opts.list, "list", false, "list configured sites")
 	flag.StringVar(&opts.service, "type", "", "service type: proxy, websocket, stream, redirect (default proxy)")
@@ -136,6 +138,9 @@ func run(manager *deploy.Manager, opts options) error {
 	case opts.del != "":
 		return deleteSite(manager, opts)
 
+	case opts.editRaw != "":
+		return editConfigManually(manager, opts.editRaw)
+
 	case opts.edit != "":
 		return editSite(manager, opts)
 
@@ -203,6 +208,17 @@ func runInteractive(manager *deploy.Manager) error {
 		}
 		return deployWithConfirmation(manager, data, &site.Data, false)
 
+	case "config":
+		sites, err := manager.Store.List()
+		if err != nil {
+			return err
+		}
+		domain, err := cli.PickSite(siteOptions(sites))
+		if err != nil {
+			return fmt.Errorf("aborted: %w", err)
+		}
+		return editConfigManually(manager, domain)
+
 	case "delete":
 		sites, err := manager.Store.List()
 		if err != nil {
@@ -256,6 +272,43 @@ func editSite(manager *deploy.Manager, opts options) error {
 	}
 
 	return deployWithConfirmation(manager, data, &site.Data, opts.yes)
+}
+
+func editConfigManually(manager *deploy.Manager, domain string) error {
+	confPath := manager.Store.ConfPath(domain)
+	if _, err := os.Stat(confPath); err != nil {
+		return fmt.Errorf("no config found for %s", domain)
+	}
+
+	editor := strings.TrimSpace(os.Getenv("VISUAL"))
+	if editor == "" {
+		editor = strings.TrimSpace(os.Getenv("EDITOR"))
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+
+	fmt.Printf("  Opening %s in %s.\n", confPath, editor)
+	fmt.Println(dimStyle.Render("  Save and quit to validate the config and reload nginx. Quit without changes to cancel."))
+	fmt.Println()
+
+	result, err := manager.EditConfig(domain, cli.OpenEditor)
+	if err != nil {
+		return err
+	}
+	if !result.Changed {
+		fmt.Println(dimStyle.Render("  No changes; nothing was reloaded."))
+		return nil
+	}
+
+	fmt.Println(successStyle.Render("\n  ✔ Config applied and nginx reloaded."))
+	if result.SettingsUpdated {
+		fmt.Println(dimStyle.Render("  Site settings were refreshed from the edited config."))
+	}
+	if result.SettingsErr != nil {
+		fmt.Println(errStyle.Render("  ! " + result.SettingsErr.Error()))
+	}
+	return nil
 }
 
 func deleteSite(manager *deploy.Manager, opts options) error {
@@ -462,7 +515,11 @@ func validateActions(opts options) error {
 	var actions []string
 	if opts.edit != "" {
 		actions = append(actions, "-edit")
-	} else if opts.domain != "" {
+	}
+	if opts.editRaw != "" {
+		actions = append(actions, "-edit-config")
+	}
+	if opts.domain != "" && opts.edit == "" {
 		actions = append(actions, "-domain")
 	}
 	if opts.del != "" {
